@@ -72,18 +72,37 @@ function is2FAMessage(body) {
 }
 
 async function emailForward(to, subject, body) {
-  // Use the gog CLI (Google Workspace) to send email from Dwight's account
-  const { execSync } = await import("child_process");
+  // Use nodemailer with Gmail SMTP
+  const nodemailer = await import("nodemailer");
+
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+
+  if (!smtpUser || !smtpPass) {
+    console.error("Email forward failed: SMTP_USER or SMTP_PASS not set");
+    return false;
+  }
+
   try {
-    execSync(
-      `gog gmail send --account dwight@dbcpallc.com --to "${to}" --subject "${subject}" --body "${body.replace(/"/g, '\\"')}"`,
-      { timeout: 15000 }
-    );
+    const transporter = nodemailer.default.createTransport({
+      service: "gmail",
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Dwight" <${smtpUser}>`,
+      to,
+      subject,
+      text: body,
+    });
+
     console.log(`Email forwarded to ${to}: ${subject}`);
     return true;
   } catch (err) {
     console.error(`Email forward failed: ${err.message}`);
-    // Fallback: try curl to a simple notification
     return false;
   }
 }
