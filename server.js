@@ -64,7 +64,9 @@ const TWO_FA_PATTERNS = [
   /(?:code|verify|verification|confirm|auth|otp|token|pin).*\b\d{4,8}\b/i,
   /your (?:code|pin|otp|token) (?:is|:)\s*\d{4,8}/i,
   /\b(?:G-|SMS-)\d{4,8}\b/i,
-  /(?:security|login|sign.?in|access) code/i,
+  /(?:security|login|sign.?in|access|verification) code/i,
+  /verif(?:y|ication)\s*(?:code|pin|token|otp)/i,
+  /\b(?:one.?time|temporary)\s*(?:code|pass|pin)/i,
 ];
 
 function is2FAMessage(body) {
@@ -116,21 +118,50 @@ await fastify.register(websocket);
 fastify.get("/health", async () => ({ status: "ok", service: "twilio-voice-agent" }));
 
 // ─── VOICE ENDPOINT (inbound + outbound calls) ────────────────
+// David's cell — calls ring here first, AI picks up if no answer
+const DAVID_CELL = "+14782939601";
+const RING_TIMEOUT_SECONDS = 20;
+
 fastify.all("/voice", async (request, reply) => {
   const host = request.headers["x-forwarded-host"] || request.headers.host;
-  const wsUrl = `wss://${host}/ws`;
   const from = request.body?.From || request.query?.From || "";
   const access = getCallerAccess(from);
 
   console.log(`Incoming call from ${from} — access level: ${access}`);
 
-  let greeting, prompt;
+  // Ring David's phone first. If no answer after timeout, fall back to AI voice agent.
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial callerId="${TWILIO_PHONE_NUMBER}" timeout="${RING_TIMEOUT_SECONDS}" action="/voice-fallback">
+    <Number>${DAVID_CELL}</Number>
+  </Dial>
+</Response>`;
+
+  reply.type("text/xml").send(twiml);
+});
+
+// Fallback: if David doesn't answer, AI Dwight picks up
+fastify.all("/voice-fallback", async (request, reply) => {
+  const host = request.headers["x-forwarded-host"] || request.headers.host;
+  const wsUrl = `wss://${host}/ws`;
+  const from = request.body?.From || request.query?.From || "";
+  const dialStatus = request.body?.DialCallStatus || "";
+  const access = getCallerAccess(from);
+
+  console.log(`Voice fallback — dial status: ${dialStatus}, from: ${from}`);
+
+  // If David answered, we're done
+  if (dialStatus === "completed") {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+    return reply.type("text/xml").send(twiml);
+  }
+
+  // David didn't answer — AI Dwight takes over
+  let greeting;
   if (access === "full") {
-    greeting = FULL_ACCESS_GREETING;
-  } else if (access === "limited") {
-    greeting = UNKNOWN_CALLER_GREETING;
+    greeting = "Hey, David couldn't pick up right now. This is Dwight, his AI assistant. What can I do for you?";
   } else {
-    greeting = UNKNOWN_CALLER_GREETING;
+    greeting = "Hi, you've reached David Bearchell CPA. David's not available right now, but I'm Dwight, the office assistant. How can I help you?";
   }
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
